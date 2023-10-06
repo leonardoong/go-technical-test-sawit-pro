@@ -3,7 +3,6 @@ package main
 import (
 	"log"
 	"os"
-	"time"
 
 	"github.com/SawitProRecruitment/UserService/config"
 	"github.com/SawitProRecruitment/UserService/generated"
@@ -39,7 +38,6 @@ func newServer() *handler.Server {
 func initConfig() *config.Config {
 	prvKey, err := os.ReadFile("cert/id_rsa")
 	if err != nil {
-		time.Sleep(time.Hour)
 		log.Fatalln(err)
 	}
 

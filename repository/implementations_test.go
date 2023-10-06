@@ -2,60 +2,199 @@ package repository
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
+	"log"
 	"testing"
 
-	gomock "github.com/golang/mock/gomock"
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/SawitProRecruitment/UserService/model"
+	"github.com/stretchr/testify/assert"
 )
 
+func NewMock() (*sql.DB, sqlmock.Sqlmock) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		log.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
+	}
+
+	return db, mock
+}
+
+var u = &model.User{
+	UserID:         1,
+	FullName:       "leo",
+	Password:       "password",
+	PhoneNumber:    "+628123456789",
+	SuccesfulLogin: 10,
+}
+
+func TestInsertUser(t *testing.T) {
+	db, mock := NewMock()
+	repo := &Repository{db}
+
+	query := "INSERT INTO users \\(phone_number, full_name, password\\) VALUES \\(\\$1, \\$2, \\$3\\) RETURNING id"
+
+	rows := sqlmock.NewRows([]string{"id"}).
+		AddRow(u.UserID)
+
+	// test 1 insert success
+	mock.ExpectQuery(query).WithArgs(u.PhoneNumber, u.FullName, u.Password).WillReturnRows(rows)
+
+	user, err := repo.InsertUser(context.Background(), InsertUserInput{
+		PhoneNumber: u.PhoneNumber,
+		FullName:    u.FullName,
+		Password:    u.Password,
+	})
+	assert.NotNil(t, user)
+	assert.NoError(t, err)
+
+	// test 2 insert success
+	mock.ExpectQuery(query).WithArgs(u.PhoneNumber, u.FullName, u.Password).WillReturnError(sql.ErrConnDone)
+
+	userError, err := repo.InsertUser(context.Background(), InsertUserInput{
+		PhoneNumber: u.PhoneNumber,
+		FullName:    u.FullName,
+		Password:    u.Password,
+	})
+	assert.Empty(t, userError)
+	assert.Error(t, err)
+}
+
 func TestGetLoginData(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
+	db, mock := NewMock()
+	repo := &Repository{db}
 
-	// Create a mock *sql.DB
-	mockDB := NewMockDB(ctrl)
+	query := "SELECT id, full_name, password FROM users WHERE phone_number = \\$1"
 
-	// Create a Repository instance with the mockDB
-	repo := NewRepository(mockDB)
+	rows := sqlmock.NewRows([]string{"id", "full_name", "password"}).
+		AddRow(u.UserID, u.FullName, u.Password)
 
-	// Set up test input
-	ctx := context.Background()
-	input := GetLoginDataInput{PhoneNumber: "123456789"}
+	// test 1 get success
+	mock.ExpectQuery(query).WithArgs(u.PhoneNumber).WillReturnRows(rows)
 
-	// Set up expectations for the QueryRowContext and Scan methods
-	expectedUserID := 1
-	expectedFullName := "John Doe"
-	expectedHashedPassword := "hashedpassword"
+	users, err := repo.GetLoginData(context.Background(), GetLoginDataInput{
+		PhoneNumber: u.PhoneNumber,
+	})
+	assert.NotNil(t, users)
+	assert.NoError(t, err)
 
-	mockDB.EXPECT().QueryRowContext(ctx, "SELECT id, full_name, password FROM users WHERE phone_number = $1", input.PhoneNumber).
-		Return(mocks.NewMockRow(ctrl)).
-		Times(1)
-
-	mockRow := mocks.NewMockRow(ctrl)
-	mockRow.EXPECT().Scan(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(dest ...interface{}) error {
-		// Simulate scanning data into the output parameters
-		dest[0] = expectedUserID
-		dest[1] = expectedFullName
-		dest[2] = expectedHashedPassword
-		return nil
+	// test 2 get error
+	mock.ExpectQuery(query).WithArgs(u.PhoneNumber).WillReturnError(sql.ErrConnDone)
+	usersError, err := repo.GetLoginData(context.Background(), GetLoginDataInput{
+		PhoneNumber: u.PhoneNumber,
 	})
 
-	// Call the GetLoginData function
-	output, err := repo.GetLoginData(ctx, input)
+	assert.Empty(t, usersError)
+	assert.Error(t, err)
+}
 
-	// Verify the result and error
-	if err != nil {
-		t.Errorf("Expected no error, got %v", err)
-	}
+func TestUpdateSuccessfulLogin(t *testing.T) {
+	db, mock := NewMock()
+	repo := &Repository{db}
 
-	if output.UserID != expectedUserID {
-		t.Errorf("Expected UserID %d, got %d", expectedUserID, output.UserID)
-	}
+	query := "UPDATE users SET successful_login = successful_login \\+ 1 WHERE phone_number = \\$1"
 
-	if output.FullName != expectedFullName {
-		t.Errorf("Expected FullName %s, got %s", expectedFullName, output.FullName)
-	}
+	// test 1 update success
+	mock.ExpectExec(query).WithArgs(u.PhoneNumber).WillReturnResult(sqlmock.NewResult(0, 0))
 
-	if output.HashedPassword != expectedHashedPassword {
-		t.Errorf("Expected HashedPassword %s, got %s", expectedHashedPassword, output.HashedPassword)
-	}
+	err := repo.UpdateSuccessfulLogin(context.Background(), UpdateSuccessfulLoginInput{
+		PhoneNumber: u.PhoneNumber,
+	})
+	assert.NoError(t, err)
+
+	// test 2 update error
+	mock.ExpectExec(query).WithArgs(u.PhoneNumber).WillReturnError(sql.ErrConnDone)
+
+	err = repo.UpdateSuccessfulLogin(context.Background(), UpdateSuccessfulLoginInput{
+		PhoneNumber: u.PhoneNumber,
+	})
+	assert.Error(t, err)
+}
+
+func TestGetUserDataByUserID(t *testing.T) {
+	db, mock := NewMock()
+	repo := &Repository{db}
+
+	query := "SELECT id, full_name, phone_number, successful_login FROM users WHERE id = \\$1"
+
+	rows := sqlmock.NewRows([]string{"id", "full_name", "phone_number", "successful_login"}).
+		AddRow(u.UserID, u.FullName, u.PhoneNumber, u.SuccesfulLogin)
+
+	// test 1 get success
+	mock.ExpectQuery(query).WithArgs(u.UserID).WillReturnRows(rows)
+
+	users, err := repo.GetUserDataByUserID(context.Background(), GetUserDataByUserIDInput{
+		UserID: u.UserID,
+	})
+	assert.NotNil(t, users)
+	assert.NoError(t, err)
+
+	// test 2 get error
+	mock.ExpectQuery(query).WithArgs(u.UserID).WillReturnError(sql.ErrConnDone)
+	usersError, err := repo.GetUserDataByUserID(context.Background(), GetUserDataByUserIDInput{
+		UserID: u.UserID,
+	})
+
+	assert.Empty(t, usersError)
+	assert.Error(t, err)
+}
+
+func TestUpdateUserData(t *testing.T) {
+	db, mock := NewMock()
+	repo := &Repository{db}
+
+	// test 1 only phone number
+	onlyPhoneNumberQuery := fmt.Sprintf("UPDATE users SET phone_number = \\'\\%s\\' WHERE id = \\$1", u.PhoneNumber)
+	mock.ExpectExec(onlyPhoneNumberQuery).WithArgs(u.UserID).WillReturnResult(sqlmock.NewResult(0, 0))
+
+	err := repo.UpdateUserData(context.Background(), UpdateUserDataInput{
+		UserID: u.UserID,
+		Data: map[string]string{
+			"phone_number": u.PhoneNumber,
+		},
+	})
+	assert.NoError(t, err)
+
+	// test 2 only full name
+	onlyFullNameQuery := fmt.Sprintf("UPDATE users SET full_name = \\'%s\\' WHERE id = \\$1", u.FullName)
+	mock.ExpectExec(onlyFullNameQuery).WithArgs(u.UserID).WillReturnResult(sqlmock.NewResult(0, 0))
+
+	err = repo.UpdateUserData(context.Background(), UpdateUserDataInput{
+		UserID: u.UserID,
+		Data: map[string]string{
+			"full_name": u.FullName,
+		},
+	})
+	assert.NoError(t, err)
+
+	// test 3 both phone number and full name
+	bothQuery := fmt.Sprintf("UPDATE users SET full_name = \\'%s\\'\\,phone_number = \\'\\%s\\' WHERE id = \\$1", u.FullName, u.PhoneNumber)
+	mock.ExpectExec(bothQuery).WithArgs(u.UserID).WillReturnResult(sqlmock.NewResult(0, 0))
+
+	err = repo.UpdateUserData(context.Background(), UpdateUserDataInput{
+		UserID: u.UserID,
+		Data: map[string]string{
+			"full_name":    u.FullName,
+			"phone_number": u.PhoneNumber,
+		},
+	})
+	assert.NoError(t, err)
+
+	// test 4 empty data
+	err = repo.UpdateUserData(context.Background(), UpdateUserDataInput{
+		UserID: u.UserID,
+	})
+	assert.Error(t, err)
+
+	// test 5 update error
+	mock.ExpectExec(bothQuery).WithArgs(u.UserID).WillReturnError(sql.ErrConnDone)
+	err = repo.UpdateUserData(context.Background(), UpdateUserDataInput{
+		UserID: u.UserID,
+		Data: map[string]string{
+			"full_name":    u.FullName,
+			"phone_number": u.PhoneNumber,
+		},
+	})
+	assert.Error(t, err)
 }
